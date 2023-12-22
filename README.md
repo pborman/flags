@@ -31,7 +31,11 @@ var opts = options {
 }
 
 func main() {
-	args := flags.RegisterAndParse(&opts)
+	args, err := flags.RegisterAndParse(&opts)
+	if err != nil {
+		fmt.Fprintln(err)
+		os.Exit(1)
+	}
 
 	if opts.Verbose {
 		fmt.Printf("Command line parameters: %q\n", args)

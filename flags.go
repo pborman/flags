@@ -97,7 +97,7 @@
 //
 //	// Register myOptions, parse the command line, and set args to the
 //	// remaining command line parameters
-//	args := flags.RegisterAndParse(&myOptions)
+//	args, err := flags.RegisterAndParse(&myOptions)
 //
 //	// Validate myOptions.
 //	err := flags.Validate(&myOptions)
@@ -135,7 +135,7 @@ type Value interface {
 
 // OnError is used by the standard flag package to determine what to do if a
 // parsing error is encountered.
-var OnError = ExitOnError
+var OnError = ContinueOnError
 
 const (
 	ExitOnError     = flag.ExitOnError
@@ -230,10 +230,10 @@ func Register(i interface{}) {
 
 // RegisterAndParse and calls Register(i), flag.Parse(), and returns
 // flag.Args().
-func RegisterAndParse(i interface{}) []string {
+func RegisterAndParse(i interface{}) ([]string, error) {
 	Register(i)
-	CommandLine.Parse(os.Args[1:])
-	return CommandLine.Args()
+	err := CommandLine.Parse(os.Args[1:])
+	return CommandLine.Args(), err
 }
 
 // SubRegisterAndParse is similar to RegisterAndParse except it is provided the
@@ -280,9 +280,9 @@ func SubRegisterAndParse(i interface{}, args []string) ([]string, error) {
 }
 
 // Parse calls flag.Parse and returns flag.Args().
-func Parse() []string {
-	CommandLine.Parse(os.Args[1:])
-	return CommandLine.Args()
+func Parse() ([]string, error) {
+	err := CommandLine.Parse(os.Args[1:])
+	return CommandLine.Args(), err
 }
 
 // Validate validates i as a set of options or returns an error.

@@ -437,12 +437,22 @@ func TestParse(t *testing.T) {
 	}{}
 	Register(opts)
 	os.Args = []string{"test", "--name", "bob", "arg"}
-	pargs := Parse()
+	pargs, err := Parse()
+	if err != nil {
+		t.Errorf("Got unexpected error: %v", err)
+	}
 	if opts.Name != "bob" {
 		t.Errorf("Got name %q, want %q", opts.Name, "bob")
 	}
 	if len(pargs) != 1 || pargs[0] != "arg" {
 		t.Errorf("Got args %q, want %q", pargs, []string{"arg"})
+	}
+
+	CommandLine.SetOutput(&bytes.Buffer{})
+	os.Args = []string{"test", "--foo"}
+	_, err = Parse()
+	if err == nil {
+		t.Errorf("Did not get an error on an invalid flag")
 	}
 }
 
