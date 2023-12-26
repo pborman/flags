@@ -1,4 +1,4 @@
-# options [![GoDoc](https://godoc.org/github.com/pborman/flags?status.svg)](http://godoc.org/github.com/pborman/flags)
+# flags [![GoDoc](https://godoc.org/github.com/pborman/flags?status.svg)](http://godoc.org/github.com/pborman/flags)
 
 Flags provides an elegant structured mechanism for declaring flags
 in Go programs.  It is a simplified version of the

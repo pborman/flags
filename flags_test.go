@@ -30,6 +30,7 @@ type X string
 
 func (x *X) Set(s string) error { *x = X(s); return nil }
 func (x *X) String() string     { return (string)(*x) }
+func (x *X) Get() any           { return *x } // Needed by some flag packages
 
 func TestVar(t *testing.T) {
 	var x X
