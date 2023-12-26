@@ -124,6 +124,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/pborman/indent"
 )
 
 // Value is the interface to the dynamic value stored in a flag. (The default
@@ -148,6 +150,9 @@ var (
 	NewFlagSet          = func(name string) FlagSet { return flag.NewFlagSet(name, OnError) }
 	CommandLine FlagSet = flag.CommandLine
 )
+
+// Used by tests
+var output io.Writer
 
 // A FlagSet implements a set of flags.  flag.FlagSet from the standard flag package implements FlagSet.
 // The FlagSet must also have the method:
@@ -188,7 +193,7 @@ func (l *list) String() string {
 //
 // Dup is normally used to create a unique instance of the set of options so i
 // can be used multiple times.
-func Dup(i interface{}) interface{} {
+func Dup(i any) any {
 	v := reflect.ValueOf(i)
 	if v.Kind() != reflect.Ptr {
 		panic(fmt.Errorf("%T is not a pointer to a struct", i))
@@ -222,7 +227,7 @@ func Dup(i interface{}) interface{} {
 
 // Register registers the fields in i with the standard command-line option set.
 // It panics for the same reasons that RegisterSet panics.
-func Register(i interface{}) {
+func Register(i any) {
 	if err := register("", i, CommandLine); err != nil {
 		panic(err)
 	}
@@ -230,7 +235,7 @@ func Register(i interface{}) {
 
 // RegisterAndParse and calls Register(i), flag.Parse(), and returns
 // flag.Args().
-func RegisterAndParse(i interface{}) ([]string, error) {
+func RegisterAndParse(i any) ([]string, error) {
 	Register(i)
 	err := CommandLine.Parse(os.Args[1:])
 	return CommandLine.Args(), err
@@ -265,13 +270,16 @@ func RegisterAndParse(i interface{}) ([]string, error) {
 //		fmt.Printf("The name is %s\n", opts.Name)
 //		fmt.Printf("The parameters are: %q\n", args)
 //	}
-func SubRegisterAndParse(i interface{}, args []string) ([]string, error) {
+func SubRegisterAndParse(i any, args []string) ([]string, error) {
 	if len(args) == 0 {
 		return nil, nil
 	}
 	set := NewFlagSet("")
 	if err := RegisterSet(args[0], i, set); err != nil {
 		return nil, err
+	}
+	if output != nil {
+		set.SetOutput(output)
 	}
 	if err := set.Parse(args[1:]); err != nil {
 		return nil, err
@@ -290,15 +298,17 @@ func Parse() ([]string, error) {
 // Use Validate to assure that a later call to one of the Register functions
 // will not panic.  Validate is typically called by an init function on
 // structures that will be registered later.
-func Validate(i interface{}) error {
+func Validate(i any) {
 	set := NewFlagSet("")
-	return register("", i, set)
+	if err := register("", i, set); err != nil {
+		panic(err)
+	}
 }
 
 // RegisterNew creates a new flag.FlagSet, duplicates i, calls RegisterSet, and
 // then returns them.  RegisterNew should be used when the options in i might be
 // parsed multiple times requiring a new instance of i each time.
-func RegisterNew(name string, i interface{}) (interface{}, FlagSet) {
+func RegisterNew(name string, i any) (any, FlagSet) {
 	set := NewFlagSet("")
 	i = Dup(i)
 	if err := register(name, i, set); err != nil {
@@ -317,11 +327,11 @@ func RegisterNew(name string, i interface{}) (interface{}, FlagSet) {
 //
 // See the package documentation for a description of the structure to pass to
 // RegisterSet.
-func RegisterSet(name string, i interface{}, set FlagSet) error {
+func RegisterSet(name string, i any, set FlagSet) error {
 	return register(name, i, set)
 }
 
-func register(name string, i interface{}, set FlagSet) error {
+func register(name string, i any, set FlagSet) error {
 	v := reflect.ValueOf(i)
 	if v.Kind() != reflect.Ptr {
 		return fmt.Errorf("%T is not a pointer to a struct", i)
@@ -342,7 +352,7 @@ func register(name string, i interface{}, set FlagSet) error {
 		}
 		o, err := parseTag(tag)
 		if err != nil {
-			panic(err)
+			return err
 		}
 		if o == nil {
 			o = &optTag{name: strings.ToLower(field.Name)}
@@ -377,7 +387,7 @@ func register(name string, i interface{}, set FlagSet) error {
 		case *bool:
 			set.BoolVar(t, o.name, *t, o.help)
 		default:
-			panic(fmt.Sprintf("invalid option type: %T", fv.Interface()))
+			return fmt.Errorf("invalid option type: %T", fv.Interface())
 		}
 	}
 	return nil
@@ -396,7 +406,7 @@ func register(name string, i interface{}, set FlagSet) error {
 //	})
 //	set.Parse(args)
 //	v := flags.Lookup(i, "verbose").(bool)
-func Lookup(i interface{}, option string) interface{} {
+func Lookup(i any, option string) any {
 	v := reflect.ValueOf(i)
 	if v.Kind() != reflect.Ptr {
 		return nil
@@ -533,7 +543,7 @@ var (
 // implement the Value inteface.  This enables this package to pass a Value
 // where the flag package expected a flag.Value.  An error is returned
 // if fs does not have a Var method with an appropriate signature.
-func setvar(fs interface{}, value Value, name, usage string) error {
+func setvar(fs any, value Value, name, usage string) error {
 	v := reflect.ValueOf(fs)
 	m := v.MethodByName("Var")
 	if !m.IsValid() {
@@ -577,37 +587,69 @@ func setvar(fs interface{}, value Value, name, usage string) error {
 //	 -v            be verbose
 //
 // If cmd is the empty string the initial line will not be printed.
-func Help(w io.Writer, cmd, parameters string, i interface{}) {
-	if i == nil {
-		if cmd == "" {
-			return
-		}
-		if parameters != "" {
-			fmt.Fprintf(w, "Usage: %s %s\n", cmd, parameters)
-		} else {
-			fmt.Fprintf(w, "Usage: %s ...\n", cmd)
-		}
-		return
+func Help(w io.Writer, cmd, parameters string, i any) {
+	usage, ml := getInfo(i, 20)
+	if cmd != "" {
+		fmt.Fprintf(w, "Usage: %s\n", getUsageLine(cmd, parameters, usage))
 	}
+	w = indent.NewWriter(w, "  ")
+	for _, i := range usage {
+		flag := i.prefix + i.flag
+		if i.help == "" && i.def == "" {
+			fmt.Fprintf(w, "%s\n", flag)
+		} else if len(flag) > ml {
+			fmt.Fprintf(w, "%s\n  %*s %s%s\n", flag, ml, "", i.help, i.def)
+		} else {
+			fmt.Fprintf(w, "%s%*s %s%s\n", flag, ml-len(i.flag), "", i.help, i.def)
+		}
+	}
+}
+
+// UsageLine returns the usage line for the flag set specified by i.
+// A usage line looks like:
+//
+//	cmd [--first=VALUE] ... [--last] parameters
+//
+// cmd and parameters can be empty strings.
+func UsageLine(cmd, parameters string, i any) string {
+	usage, _ := getInfo(i, 0)
+	return getUsageLine(cmd, parameters, usage)
+}
+
+func getUsageLine(cmd, parameters string, usage []flagInfo) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s", cmd)
+	for _, i := range usage {
+		fmt.Fprintf(&b, " [%s%s]", strings.TrimSpace(i.prefix), i.flag)
+	}
+	if parameters != "" {
+		fmt.Fprintf(&b, " %s", parameters)
+	}
+	return strings.TrimPrefix(b.String(), " ")
+}
+
+type flagInfo struct {
+	prefix string
+	flag   string
+	param  string
+	help   string
+	def    string
+}
+
+// getInfo returns a sorted list of flagInfo for each flag in i.  It also returns the longest name in i.
+func getInfo(i any, max int) ([]flagInfo, int) {
 	v := reflect.ValueOf(i)
 	if v.Kind() != reflect.Ptr {
-		fmt.Fprintf(w, "%T is not a pointer to a struct\n", i)
-		return
+		return nil, 0
 	}
 	v = v.Elem()
 	if v.Kind() != reflect.Struct {
-		fmt.Fprintf(w, "%T is not a pointer to a struct\n", i)
-		return
+		return nil, 0
 	}
 	t := v.Type()
 
 	n := t.NumField()
-	type info struct {
-		prefix string
-		flag   string
-		help   string
-	}
-	var usage []info
+	var usage []flagInfo
 	ml := 0
 	for i := 0; i < n; i++ {
 		field := t.Field(i)
@@ -623,7 +665,7 @@ func Help(w io.Writer, cmd, parameters string, i interface{}) {
 		if o == nil {
 			o = &optTag{name: strings.ToLower(field.Name)}
 		}
-		i := info{
+		i := flagInfo{
 			prefix: "--",
 			flag:   o.name,
 			help:   o.help,
@@ -637,32 +679,16 @@ func Help(w io.Writer, cmd, parameters string, i interface{}) {
 				o.param = "VALUE"
 			}
 			i.flag += "=" + o.param
+			i.param = o.param
 		}
-		if n := len(i.flag) + 1 + len(i.prefix); n > ml && n <= 20 {
+		if fv.IsValid() && !fv.IsZero() {
+			i.def = fmt.Sprintf(" [%v]", fv.Interface())
+		}
+		if n := len(i.flag) + 1 + len(i.prefix); n > ml && n < max {
 			ml = n
 		}
 		usage = append(usage, i)
 	}
 	sort.Slice(usage, func(i, j int) bool { return usage[i].flag < usage[j].flag })
-	if ml > 20 {
-		ml = 20
-	}
-	if cmd != "" {
-		fmt.Fprintf(w, "Usage: %s", cmd)
-		for _, i := range usage {
-			fmt.Fprintf(w, " [%s%s]", i.prefix, i.flag)
-		}
-		if parameters != "" {
-			fmt.Fprintf(w, " %s", parameters)
-		}
-		fmt.Fprintln(w)
-	}
-	for _, i := range usage {
-		flag := i.prefix + i.flag
-		if len(flag) > ml {
-			fmt.Fprintf(w, "%s\n%*s %s\n", flag, ml, "", i.help)
-		} else {
-			fmt.Fprintf(w, "%s%*s %s\n", flag, ml-len(flag), "", i.help)
-		}
-	}
+	return usage, ml
 }

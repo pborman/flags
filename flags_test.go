@@ -1,4 +1,4 @@
-// Copyright 2018 Paul Borman
+// Copyright 2023 Paul Borman
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,12 +16,14 @@ package flags
 import (
 	"bytes"
 	"flag"
+	"fmt"
 	"os"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/openconfig/gnmi/errdiff"
+	"github.com/pborman/check"
 )
 
 type X string
@@ -43,6 +45,39 @@ func TestVar(t *testing.T) {
 	})
 	if !found {
 		t.Errorf("flag was not set")
+	}
+}
+
+type badvar1 struct{}
+
+func (*badvar1) Var(string, string, int) {}
+
+type badvar2 struct{}
+
+func (*badvar2) Var(string, string, string, string) {}
+
+type badvar3 struct{}
+
+func (*badvar3) Var(string, string) {}
+
+func TestSetVar(t *testing.T) {
+	var x X
+	if s := check.Error(setvar(&struct{}{}, &x, "X", ""), "Type *struct {} missing Var method"); s != "" {
+		t.Error(s)
+	}
+	p1 := "Type *flags.badvar"
+	p2 := " has the wrong signature for Var"
+	if s := check.Error(setvar(&badvar1{}, &x, "X", ""), p1+"1"+p2); s != "" {
+		t.Error(s)
+	}
+	if s := check.Error(setvar(&badvar1{}, &x, "X", ""), p1+"1"+p2); s != "" {
+		t.Error(s)
+	}
+	if s := check.Error(setvar(&badvar2{}, &x, "X", ""), p1+"2"+p2); s != "" {
+		t.Error(s)
+	}
+	if s := check.Error(setvar(&badvar3{}, &x, "X", ""), p1+"3"+p2); s != "" {
+		t.Error(s)
 	}
 }
 
@@ -82,19 +117,46 @@ func TestLookup(t *testing.T) {
 	}
 }
 
+func checkPanic(p any, want string) string {
+	if p == nil {
+		return ""
+	}
+	switch t := p.(type) {
+	case string:
+		if t == want {
+			return ""
+		}
+	case error:
+		if t.Error() == want {
+			return ""
+		}
+	default:
+		panic(p)
+	}
+	return fmt.Sprintf("Got panic %s, want %s", p, want)
+
+}
+
 func TestValidate(t *testing.T) {
-	opts := &struct {
-		Name string `flag:"--the_name"`
-	}{}
-	if err := Validate(opts); err != nil {
-		t.Errorf("Validate returned error %v for valid set", err)
-	}
-	opts2 := struct {
-		Name string `flag:"the_name"`
-	}{}
-	if err := Validate(opts2); err == nil {
-		t.Errorf("Validate did not return an error for an valid set")
-	}
+	func() {
+		// This validate should pass
+		opts := &struct {
+			Name string `flag:"--the_name"`
+		}{}
+		Validate(opts)
+	}()
+	func() {
+		defer func() {
+			if s := checkPanic(recover(),
+				`struct { Name string "flag:\"the_name\"" } is not a pointer to a struct`); s != "" {
+				t.Error(s)
+			}
+		}()
+		opts2 := struct {
+			Name string `flag:"the_name"`
+		}{}
+		Validate(opts2)
+	}()
 }
 
 func TestRegisterSet(t *testing.T) {
@@ -129,27 +191,24 @@ func TestRegisterSet(t *testing.T) {
 func TestRegister(t *testing.T) {
 	func() {
 		defer func() {
-			p := recover()
-			if p == nil {
-				t.Errorf("Regiser did not panic on string")
+			if s := checkPanic(recover(), "string is not a pointer to a struct"); s != "" {
+				t.Error(s)
 			}
 		}()
 		Register("a")
 	}()
 	func() {
 		defer func() {
-			p := recover()
-			if p == nil {
-				t.Errorf("Register did not panic on *string")
+			if s := checkPanic(recover(), "*string is not a pointer to a struct"); s != "" {
+				t.Error(s)
 			}
 		}()
 		Register(new(string))
 	}()
 	func() {
 		defer func() {
-			p := recover()
-			if p == nil {
-				t.Errorf("Registerdid not panic on bad tag")
+			if s := checkPanic(recover(), ""); s != "" {
+				t.Error(s)
 			}
 		}()
 		register("test", &struct {
@@ -190,6 +249,9 @@ func TestMultiString(t *testing.T) {
 }
 
 func TestSubRegisterAndParse(t *testing.T) {
+	var b bytes.Buffer
+	output = &b
+	defer func() { output = nil }()
 	opts := struct {
 		Value string `flag:"--the_name=VALUE help"`
 	}{
@@ -211,10 +273,12 @@ func TestSubRegisterAndParse(t *testing.T) {
 		args:  []string{"name", "--the_name=fred", "a", "b", "c"},
 		value: "fred",
 		out:   []string{"a", "b", "c"},
+	}, {
+		value: "bob",
 	}} {
 		myopts := opts
 		args, err := SubRegisterAndParse(&myopts, tt.args)
-		if s := errdiff.Check(err, tt.err); s != "" {
+		if s := check.Error(err, tt.err); s != "" {
 			t.Errorf("%s", s)
 			continue
 		}
@@ -227,6 +291,14 @@ func TestSubRegisterAndParse(t *testing.T) {
 		if !reflect.DeepEqual(tt.out, args) {
 			t.Errorf("%q got args %#v, want %#v", tt.args, args, tt.out)
 		}
+	}
+	_, err := SubRegisterAndParse(&struct{ N int16 }{}, []string{"c"})
+	if s := check.Error(err, "invalid option type: int16"); s != "" {
+		t.Error(s)
+	}
+	_, err = SubRegisterAndParse(&struct{}{}, []string{"c", "-v"})
+	if s := check.Error(err, "flag provided but not defined: -v"); s != "" {
+		t.Error(s)
 	}
 }
 
@@ -424,6 +496,26 @@ func TestDup(t *testing.T) {
 			Opt bool `flag:"bad tag"`
 		}{})
 	}()
+
+	// Test to make sure dup does not copy "-" values.
+	type opt struct {
+		Flag    string
+		Private string `flag:"-"`
+	}
+	in := &opt{
+		Flag:    "flag",
+		Private: "private",
+	}
+	want := &opt{
+		Flag: "flag",
+	}
+	got := Dup(in).(*opt)
+	if got.Flag != want.Flag {
+		t.Errorf("Got flag %q, want %q", got.Flag, want.Flag)
+	}
+	if got.Private != want.Private {
+		t.Errorf("Got private %q, want %q", got.Private, want.Private)
+	}
 }
 
 func TestParse(t *testing.T) {
@@ -458,24 +550,26 @@ func TestParse(t *testing.T) {
 
 func TestHelp(t *testing.T) {
 	opts := &struct {
-		Alpha   string   `flag:"--alpha=LEVEL set the alpha level"`
-		Beta    int      `flag:"--beta=N      set beta to N"`
-		Float   float64  `flag:"-f=RATE       set frame rate to RATE"`
-		Fancy   bool     `flag:"--the_real_fancy_and_long_option yes or no"`
-		Verbose bool     `flag:"-v            be verbose"`
-		List    []string `flag:"--list=ITEM   add ITEM to list"`
-	}{}
+		Alpha   string  `flag:"--alpha=LEVEL set the alpha level"`
+		Beta    int     `flag:"--beta=N      set beta to N"`
+		Float   float64 `flag:"-f=RATE       set frame rate to RATE"`
+		Fancy   bool    `flag:"--the_real_fancy_and_long_option yes or no"`
+		Verbose bool    `flag:"-v            be verbose"`
+		List    []string
+	}{
+		Alpha: "foo",
+	}
 	usage := `
-Usage: xyzzy [--alpha=LEVEL] [--beta=N] [ -f=RATE] [--list=ITEM] [--the_real_fancy_and_long_option] [ -v] ...
+Usage: xyzzy [--alpha=LEVEL] [--beta=N] [-f=RATE] [--list=VALUE] [--the_real_fancy_and_long_option] [-v] ...
 `[1:]
 	want := `
---alpha=LEVEL  set the alpha level
---beta=N       set beta to N
- -f=RATE       set frame rate to RATE
---list=ITEM    add ITEM to list
---the_real_fancy_and_long_option
-               yes or no
- -v            be verbose
+  --alpha=LEVEL    set the alpha level [foo]
+  --beta=N         set beta to N
+   -f=RATE         set frame rate to RATE
+  --list=VALUE
+  --the_real_fancy_and_long_option
+                   yes or no
+   -v              be verbose
 `[1:]
 	var out bytes.Buffer
 	Help(&out, "xyzzy", "...", opts)
@@ -500,8 +594,185 @@ Usage: xyzzy [--alpha=LEVEL] [--beta=N] [ -f=RATE] [--list=ITEM] [--the_real_fan
 	out.Reset()
 	Help(&out, "command", "", nil)
 	got = out.String()
-	want = "Usage: command ...\n"
+	want = "Usage: command\n"
 	if got != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
 	}
+}
+
+func TestAll(t *testing.T) {
+	type options struct {
+		List1    list
+		List2    []string
+		Duration time.Duration
+		String   string
+		Int      int
+		Int64    int64
+		Uint     uint
+		Uint64   uint64
+		Float    float64
+		Bool     bool
+	}
+	opts := &options{}
+	vnopts, fs := RegisterNew("all", opts)
+	want := &options{
+		List1:    []string{"a", "b"},
+		List2:    []string{"c", "d"},
+		Duration: 1200 * time.Millisecond,
+		String:   "str",
+		Int:      -42,
+		Int64:    17,
+		Uint:     7,
+		Uint64:   13,
+		Float:    1.425,
+		Bool:     true,
+	}
+	got := vnopts.(*options)
+
+	if err := fs.Parse([]string{"--list1", "a", "--list1", "b", "--list2", "c", "--list2", "d", "--duration", "1.2s", "--string", "str", "--int", "-42", "--int64", "17", "--uint", "7", "--uint64", "13", "--float", "1.425", "--bool"}); err != nil {
+		t.Fatalf("Parsing: %v", err)
+	}
+	if !reflect.DeepEqual(got.List1, want.List1) {
+		t.Errorf("List1: got %v, want %v", got.List1, want.List1)
+	}
+	if !reflect.DeepEqual(got.List2, want.List2) {
+		t.Errorf("List2: got %v, want %v", got.List2, want.List2)
+	}
+	if !reflect.DeepEqual(got.Duration, want.Duration) {
+		t.Errorf("Duration: got %v, want %v", got.Duration, want.Duration)
+	}
+	if !reflect.DeepEqual(got.String, want.String) {
+		t.Errorf("String: got %v, want %v", got.String, want.String)
+	}
+	if !reflect.DeepEqual(got.Int, want.Int) {
+		t.Errorf("Int: got %v, want %v", got.Int, want.Int)
+	}
+	if !reflect.DeepEqual(got.Int64, want.Int64) {
+		t.Errorf("Int64: got %v, want %v", got.Int64, want.Int64)
+	}
+	if !reflect.DeepEqual(got.Uint, want.Uint) {
+		t.Errorf("Uint: got %v, want %v", got.Uint, want.Uint)
+	}
+	if !reflect.DeepEqual(got.Uint64, want.Uint64) {
+		t.Errorf("Uint64: got %v, want %v", got.Uint64, want.Uint64)
+	}
+	if !reflect.DeepEqual(got.Float, want.Float) {
+		t.Errorf("Float: got %v, want %v", got.Float, want.Float)
+	}
+	if !reflect.DeepEqual(got.Bool, want.Bool) {
+		t.Errorf("Bool: got %v, want %v", got.Bool, want.Bool)
+	}
+}
+
+func TestError(t *testing.T) {
+	for _, tt := range []struct {
+		i     any
+		panic string
+	}{{
+		i:     "foo",
+		panic: "string is not a pointer to a struct",
+	}, {
+		i:     new(int),
+		panic: "*int is not a pointer to a struct",
+	}, {
+		i: &struct {
+			Int16 int16
+		}{},
+		panic: "invalid option type: int16",
+	}} {
+		t.Run(fmt.Sprintf("%v", tt.i), func(t *testing.T) {
+			defer func() {
+				if s := checkPanic(recover(), tt.panic); s != "" {
+					t.Error(s)
+				}
+
+			}()
+			Validate(tt.i)
+		})
+	}
+}
+
+func TestRegisterAndParse(t *testing.T) {
+	var opts = &struct {
+		Name string `flag:"--name"`
+	}{}
+	for _, tt := range []struct {
+		in    []string
+		name  string
+		want  string
+		index int // index into in for the args
+		error string
+	}{{
+		name: "empty",
+		in:   []string{},
+	}, {
+		name: "no flags",
+		in:   []string{"a", "b"},
+	}, {
+		name:  "have flag",
+		in:    []string{"--name", "bob", "a", "b"},
+		index: 2,
+		want:  "bob",
+	}} {
+		t.Run(fmt.Sprint(tt.in), func(t *testing.T) {
+			defer func() {
+				if s := checkPanic(recover(), tt.error); s != "" {
+					t.Error(s)
+				}
+			}()
+			opts.Name = ""
+			CommandLine = NewFlagSet("")
+			os.Args = append([]string{"command"}, tt.in...)
+			args, err := RegisterAndParse(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if opts.Name != tt.want {
+				t.Errorf("Got name %q, want %q", opts.Name, tt.want)
+			}
+			if !reflect.DeepEqual(args, tt.in[tt.index:]) {
+				t.Errorf("Got %q, want %q", args, tt.in[tt.index])
+			}
+		})
+	}
+}
+
+func TestUsageLine(t *testing.T) {
+	opts := &struct {
+		Name string
+	}{}
+	got := UsageLine("cmd", "param", opts)
+	want := "cmd [--name=VALUE] param"
+	if got != want {
+		t.Errorf("Got %q, want %q", got, want)
+	}
+}
+
+func TestGetInfo(t *testing.T) {
+	u, i := getInfo(new(string), 10)
+	if u != nil || i != 0 {
+		t.Errorf("bad types got %v,%d want %v,%d", u, i, nil, 0)
+	}
+	opts := &struct {
+		Missing int `flag:"-"`
+		BadFlag int `flag:"-v -y"`
+	}{}
+	u, i = getInfo(opts, 10)
+	if u != nil || i != 0 {
+		t.Errorf("bad tag got %v,%d want %v,%d", u, i, nil, 0)
+	}
+}
+
+func TestExtra(t *testing.T) {
+	var opts = &struct {
+		Name    string `flag:"--name"`
+		Private string `flag:"-"`
+		Int16   int16
+	}{}
+	defer func() {
+		if s := checkPanic(recover(), "invalid option type: int16"); s != "" {
+			t.Error(s)
+		}
+	}()
+	RegisterNew("extra", opts)
 }
