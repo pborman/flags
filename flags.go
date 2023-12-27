@@ -355,10 +355,6 @@ func register(name string, i any, set FlagSet) error {
 		if o.help == "" {
 			o.help = "unspecified"
 		}
-		hv := []string{o.help, o.param}
-		if o.param == "" {
-			hv = hv[:1]
-		}
 		opt := fv.Addr().Interface()
 		switch t := opt.(type) {
 		case Value:
