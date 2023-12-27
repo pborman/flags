@@ -135,19 +135,10 @@ type Value interface {
 	Set(string) error
 }
 
-// OnError is used by the standard flag package to determine what to do if a
-// parsing error is encountered.
-var OnError = ContinueOnError
-
-const (
-	ExitOnError     = flag.ExitOnError
-	ContinueOnError = flag.ContinueOnError
-)
-
 // NewFlagSet and CommandLine can be replaced to use a different flag package.
 // They default to the standard flag package.
 var (
-	NewFlagSet          = func(name string) FlagSet { return flag.NewFlagSet(name, OnError) }
+	NewFlagSet          = func(name string) FlagSet { return flag.NewFlagSet(name, flag.ContinueOnError) }
 	CommandLine FlagSet = flag.CommandLine
 )
 
