@@ -178,6 +178,10 @@ func (l *list) String() string {
 	return strings.Join(*l, " ")
 }
 
+func (l *list) Get() any {
+	return *l
+}
+
 // Dup returns a shallow duplicate of i or panics.  Dup panics if i is not a
 // pointer to struct or has an invalid flag tag.  Dup does not copy
 // non-exported fields or fields whose flag tag is "-".
